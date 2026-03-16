@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'admin_add_question_screen.dart';
-import '../../admin_import_screen.dart';
 import '../controller/admin_exam_management_controller.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -224,15 +223,6 @@ class _AdminExamManagementScreenState extends State<AdminExamManagementScreen> {
               child: Icon(Icons.quiz_rounded)),
       actions: [
         if (_ctrl.currentLevel == 0) ...[
-          // ── Import CSV ──────────────────────────────────────────────────────
-          Tooltip(
-            message: 'นำเข้า CSV',
-            child: IconButton(
-              icon: const Icon(Icons.upload_file_rounded),
-              onPressed: () => Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => const AdminImportScreen())),
-            ),
-          ),
           // ── สร้างชุดข้อสอบ ──────────────────────────────────────────────────
           Padding(
             padding: const EdgeInsets.only(right: 8),
