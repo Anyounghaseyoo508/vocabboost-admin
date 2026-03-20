@@ -13,13 +13,7 @@ class _AdminMonitoringScreenState extends State<AdminMonitoringScreen> {
 
   int _totalUsers = 0;
   int _activeUsers = 0;
-  int _totalSubmissions = 0;
-  double _avgScore = 0;
-  List<_UserAggregate> _topUsers = [];
-  List<_UserAggregate> _weakUsers = [];
-  List<_TestExtrema> _testExtrema = [];
-  List<Map<String, dynamic>> _recentIssues = [];
-  Map<String, Map<String, dynamic>> _usersById = {};
+  List<_UserScoreSummary> _topUsers = [];
   bool _isLoading = true;
 
   @override
@@ -44,73 +38,48 @@ class _AdminMonitoringScreenState extends State<AdminMonitoringScreen> {
 
       final submissionsResponse = await _supabase
           .from('exam_submissions')
-          .select('user_id, test_id, score, total_questions');
+          .select('user_id, score');
 
-      final submissions = List<Map<String, dynamic>>.from(submissionsResponse);
-      final avgScore = submissions.isEmpty
-          ? 0.0
-          : submissions
-                  .map((e) => (e['score'] as num?)?.toDouble() ?? 0)
-                  .reduce((a, b) => a + b) /
-              submissions.length;
+      final summariesByUser = <String, _UserScoreSummary>{};
 
-      final byUser = <String, _UserAggregate>{};
-      final byTest = <int, _TestExtrema>{};
+      for (final row in submissionsResponse) {
+        final map = Map<String, dynamic>.from(row as Map);
+        final userId = map['user_id'] as String?;
+        if (userId == null) continue;
 
-      for (final row in submissions) {
-        final userId = row['user_id'] as String?;
-        final testId = (row['test_id'] as num?)?.toInt();
-        final score = (row['score'] as num?)?.toDouble() ?? 0;
-        final total = (row['total_questions'] as num?)?.toDouble() ?? 0;
-        final accuracy = total == 0 ? 0.0 : (score / total) * 100;
-        final userMap = userId == null ? null : usersById[userId];
+        final score = (map['score'] as num?)?.toDouble() ?? 0;
+        final userMap = usersById[userId];
         final name = (userMap?['display_name'] as String?)?.trim();
         final email = (userMap?['email'] as String?) ?? '-';
         final label = (name != null && name.isNotEmpty) ? name : email;
 
-        if (userId != null) {
-          final agg = byUser.putIfAbsent(
-              userId, () => _UserAggregate(userLabel: label, email: email));
-          agg.totalScore += score;
-          agg.attempts += 1;
-          agg.totalAccuracy += accuracy;
-        }
-
-        if (testId != null) {
-          final extrema =
-              byTest.putIfAbsent(testId, () => _TestExtrema(testId: testId));
-          extrema.consume(row, label, email, score);
-        }
+        final summary = summariesByUser.putIfAbsent(
+          userId,
+          () => _UserScoreSummary(
+            userId: userId,
+            userLabel: label,
+            email: email,
+          ),
+        );
+        summary.consume(score);
       }
 
-      final topUsers = byUser.values.toList()
-        ..sort((a, b) => b.avgScore.compareTo(a.avgScore));
-      final weakUsers = byUser.values.toList()
-        ..sort((a, b) => a.avgAccuracy.compareTo(b.avgAccuracy));
-      final extremaList = byTest.values.toList()
-        ..sort((a, b) => a.testId.compareTo(b.testId));
+      final topUsers = summariesByUser.values.toList()
+        ..sort((a, b) {
+          final maxCompare = b.maxScore.compareTo(a.maxScore);
+          if (maxCompare != 0) return maxCompare;
 
-      List<Map<String, dynamic>> issues = [];
-      try {
-        final issuesResponse = await _supabase
-            .from('user_issues')
-            .select('user_id, description, status, created_at')
-            .order('created_at', ascending: false)
-            .limit(10);
-        issues = List<Map<String, dynamic>>.from(issuesResponse);
-      } catch (_) {}
+          final minCompare = b.minScore.compareTo(a.minScore);
+          if (minCompare != 0) return minCompare;
+
+          return a.userLabel.toLowerCase().compareTo(b.userLabel.toLowerCase());
+        });
 
       if (!mounted) return;
       setState(() {
         _totalUsers = usersCountResponse.length;
         _activeUsers = activeCountResponse.length;
-        _totalSubmissions = submissions.length;
-        _avgScore = avgScore;
-        _topUsers = topUsers.take(5).toList();
-        _weakUsers = weakUsers.take(5).toList();
-        _testExtrema = extremaList;
-        _recentIssues = issues;
-        _usersById = usersById;
+        _topUsers = topUsers;
         _isLoading = false;
       });
     } catch (e) {
@@ -126,7 +95,7 @@ class _AdminMonitoringScreenState extends State<AdminMonitoringScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('ภาพรวมผู้ใช้และผลสอบ'),
+        title: const Text('ติดตามผู้ใช้'),
         backgroundColor: Colors.indigo,
         actions: [
           IconButton(
@@ -147,141 +116,117 @@ class _AdminMonitoringScreenState extends State<AdminMonitoringScreen> {
                   Row(
                     children: [
                       Expanded(
-                          child: _statCard('ผู้ใช้ทั้งหมด', '$_totalUsers',
-                              Icons.people, Colors.blue)),
+                        child: _statCard(
+                          'ผู้ใช้ทั้งหมด',
+                          '$_totalUsers',
+                          Icons.people,
+                          Colors.blue,
+                        ),
+                      ),
                       const SizedBox(width: 12),
                       Expanded(
-                          child: _statCard('ผู้ใช้ Active', '$_activeUsers',
-                              Icons.person, Colors.green)),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                          child: _statCard(
-                              'จำนวนการส่งข้อสอบ',
-                              '$_totalSubmissions',
-                              Icons.assignment,
-                              Colors.orange)),
-                      const SizedBox(width: 12),
-                      Expanded(
-                          child: _statCard(
-                              'คะแนนเฉลี่ยระบบ',
-                              _avgScore.toStringAsFixed(1),
-                              Icons.analytics,
-                              Colors.purple)),
+                        child: _statCard(
+                          'ผู้ใช้ Active',
+                          '$_activeUsers',
+                          Icons.person,
+                          Colors.green,
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 24),
-                  _sectionTitle('Top Users (คะแนนเฉลี่ยสูงสุด)'),
+                  _sectionTitle('Top User'),
+                  const SizedBox(height: 8),
                   if (_topUsers.isEmpty)
                     const Card(child: ListTile(title: Text('ยังไม่มีข้อมูล')))
                   else
-                    ..._topUsers.map((u) => Card(
-                          child: ListTile(
-                            leading: const Icon(Icons.emoji_events,
-                                color: Colors.amber),
-                            title: Text(u.userLabel),
-                            subtitle: Text(
-                                'Attempts: ${u.attempts} | Accuracy: ${u.avgAccuracy.toStringAsFixed(1)}%'),
-                            trailing: Text(u.avgScore.toStringAsFixed(1)),
+                    ..._topUsers.map(
+                      (user) => Card(
+                        child: ListTile(
+                          leading: const CircleAvatar(
+                            backgroundColor: Color(0xFFE8EEF7),
+                            child: Icon(
+                              Icons.emoji_events_outlined,
+                              color: Color(0xFF1E3A5F),
+                            ),
                           ),
-                        )),
-                  const SizedBox(height: 20),
-                  _sectionTitle('Users ที่ควรติดตาม (Accuracy ต่ำสุด)'),
-                  if (_weakUsers.isEmpty)
-                    const Card(child: ListTile(title: Text('ยังไม่มีข้อมูล')))
-                  else
-                    ..._weakUsers.map((u) => Card(
-                          child: ListTile(
-                            leading: const Icon(Icons.warning_amber,
-                                color: Colors.deepOrange),
-                            title: Text(u.userLabel),
-                            subtitle: Text('Attempts: ${u.attempts}'),
-                            trailing:
-                                Text('${u.avgAccuracy.toStringAsFixed(1)}%'),
-                          ),
-                        )),
-                  const SizedBox(height: 20),
-                  _sectionTitle('Max/Min แยกตามชุดข้อสอบ'),
-                  if (_testExtrema.isEmpty)
-                    const Card(
-                        child: ListTile(title: Text('ยังไม่มีข้อมูลชุดข้อสอบ')))
-                  else
-                    ..._testExtrema.map(
-                      (t) => Card(
-                        child: Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                          title: Text(user.userLabel),
+                          subtitle: Text(user.email),
+                          trailing: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.end,
                             children: [
-                              Text('Test #${t.testId}',
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.bold)),
-                              const SizedBox(height: 6),
                               Text(
-                                  'สูงสุด: ${t.maxUserLabel} (${t.maxScore.toStringAsFixed(1)})'),
+                                'Min ${user.minScore.toStringAsFixed(1)}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
                               Text(
-                                  'ต่ำสุด: ${t.minUserLabel} (${t.minScore.toStringAsFixed(1)})'),
+                                'Max ${user.maxScore.toStringAsFixed(1)}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF1E3A5F),
+                                ),
+                              ),
                             ],
                           ),
                         ),
                       ),
                     ),
-                  const SizedBox(height: 20),
-                  _sectionTitle('ปัญหาที่ผู้ใช้รายงานล่าสุด'),
-                  if (_recentIssues.isEmpty)
-                    const Card(
-                        child: ListTile(title: Text('ไม่มีปัญหาที่รายงาน')))
-                  else
-                    ..._recentIssues.map((issue) {
-                      final issueUserId = issue['user_id'] as String?;
-                      final user =
-                          issueUserId == null ? null : _usersById[issueUserId];
-                      final displayName = user?['display_name'];
-                      final email = user?['email'] ?? '-';
-                      final userLabel =
-                          (displayName is String && displayName.isNotEmpty)
-                              ? displayName
-                              : email;
-                      return Card(
-                        child: ListTile(
-                          title: Text(userLabel),
-                          subtitle: Text(issue['description'] ?? '-'),
-                          trailing:
-                              Chip(label: Text(issue['status'] ?? 'pending')),
-                        ),
-                      );
-                    }),
                 ],
               ),
             ),
     );
   }
 
-  Widget _sectionTitle(String text) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Text(text,
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+  Widget _sectionTitle(String title) {
+    return Text(
+      title,
+      style: const TextStyle(
+        fontSize: 18,
+        fontWeight: FontWeight.bold,
+        color: Color(0xFF1E3A5F),
+      ),
     );
   }
 
-  Widget _statCard(String label, String value, IconData icon, Color color) {
+  Widget _statCard(String title, String value, IconData icon, Color color) {
     return Card(
+      elevation: 1.5,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Column(
+        child: Row(
           children: [
-            Icon(icon, color: color),
-            const SizedBox(height: 8),
-            Text(value,
-                style: TextStyle(
-                    fontSize: 22, fontWeight: FontWeight.bold, color: color)),
-            Text(label,
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
-                textAlign: TextAlign.center),
+            CircleAvatar(
+              radius: 22,
+              backgroundColor: color.withValues(alpha: 0.14),
+              child: Icon(icon, color: color),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      color: Colors.grey.shade700,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    value,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -289,37 +234,21 @@ class _AdminMonitoringScreenState extends State<AdminMonitoringScreen> {
   }
 }
 
-class _UserAggregate {
+class _UserScoreSummary {
+  _UserScoreSummary({
+    required this.userId,
+    required this.userLabel,
+    required this.email,
+  });
+
+  final String userId;
   final String userLabel;
   final String email;
-  double totalScore = 0;
-  double totalAccuracy = 0;
-  int attempts = 0;
+  double minScore = double.infinity;
+  double maxScore = double.negativeInfinity;
 
-  _UserAggregate({required this.userLabel, required this.email});
-
-  double get avgScore => attempts == 0 ? 0 : totalScore / attempts;
-  double get avgAccuracy => attempts == 0 ? 0 : totalAccuracy / attempts;
-}
-
-class _TestExtrema {
-  final int testId;
-  double maxScore = -1;
-  double minScore = 999999;
-  String maxUserLabel = '-';
-  String minUserLabel = '-';
-
-  _TestExtrema({required this.testId});
-
-  void consume(
-      Map<String, dynamic> row, String userLabel, String email, double score) {
-    if (score > maxScore) {
-      maxScore = score;
-      maxUserLabel = userLabel.isEmpty ? email : userLabel;
-    }
-    if (score < minScore) {
-      minScore = score;
-      minUserLabel = userLabel.isEmpty ? email : userLabel;
-    }
+  void consume(double score) {
+    if (score < minScore) minScore = score;
+    if (score > maxScore) maxScore = score;
   }
 }

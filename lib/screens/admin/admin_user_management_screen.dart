@@ -25,10 +25,8 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
   Future<void> _loadUsers() async {
     setState(() => _isLoading = true);
     try {
-      final response = await _supabase
-          .from('users')
-          .select('id, email, display_name, role, is_active, created_at')
-          .order('created_at', ascending: false);
+      final response =
+          await _supabase.from('users').select().order('created_at', ascending: false);
 
       if (!mounted) return;
       setState(() {
@@ -44,8 +42,12 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
     }
   }
 
-  Future<void> _updateUser(Map<String, dynamic> user,
-      {String? role, String? displayName, bool? isActive}) async {
+  Future<void> _updateUser(
+    Map<String, dynamic> user, {
+    String? role,
+    String? displayName,
+    bool? isActive,
+  }) async {
     try {
       await _supabase.from('users').update({
         if (role != null) 'role': role,
@@ -78,11 +80,13 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('ยกเลิก')),
+            onPressed: () => Navigator.pop(context),
+            child: const Text('ยกเลิก'),
+          ),
           ElevatedButton(
-              onPressed: () => Navigator.pop(context, controller.text.trim()),
-              child: const Text('บันทึก')),
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: const Text('บันทึก'),
+          ),
         ],
       ),
     );
@@ -137,21 +141,46 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
                     itemCount: filtered.length,
                     itemBuilder: (context, index) {
                       final user = filtered[index];
-                      final isActive = user['is_active'] != false;
+                      final isEnabled = user['is_active'] != false;
                       final role = (user['role'] ?? 'user') as String;
                       final email = user['email'] ?? '-';
                       final displayName = user['display_name'] ?? email;
+                      final activity = _resolveActivity(user);
 
                       return Card(
                         child: ListTile(
-                          title: Text(displayName),
-                          subtitle: Text(email),
+                          title: Row(
+                            children: [
+                              Expanded(child: Text(displayName)),
+                              _ActivityBadge(activity: activity),
+                            ],
+                          ),
+                          subtitle: Padding(
+                            padding: const EdgeInsets.only(top: 6),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(email),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Role: $role | บัญชี: ${isEnabled ? 'เปิดใช้งาน' : 'ปิดใช้งาน'}',
+                                ),
+                                if (activity.detail != null) ...[
+                                  const SizedBox(height: 4),
+                                  Text(activity.detail!),
+                                ],
+                              ],
+                            ),
+                          ),
                           leading: CircleAvatar(
                             backgroundColor: role == 'admin'
                                 ? Colors.deepPurple
                                 : Colors.blue,
-                            child: Text(role == 'admin' ? 'A' : 'U',
-                                style: const TextStyle(color: Colors.white)),
+                            child: Text(
+                              role == 'admin' ? 'A' : 'U',
+                              style: const TextStyle(color: Colors.white),
+                            ),
                           ),
                           trailing: PopupMenuButton<String>(
                             onSelected: (value) async {
@@ -162,26 +191,30 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
                               } else if (value == 'make_user') {
                                 await _updateUser(user, role: 'user');
                               } else if (value == 'toggle_active') {
-                                await _updateUser(user, isActive: !isActive);
+                                await _updateUser(user, isActive: !isEnabled);
                               }
                             },
                             itemBuilder: (context) => [
                               const PopupMenuItem(
-                                  value: 'edit_name',
-                                  child: Text('แก้ชื่อโปรไฟล์')),
+                                value: 'edit_name',
+                                child: Text('แก้ชื่อโปรไฟล์'),
+                              ),
                               PopupMenuItem(
-                                value: role == 'admin'
-                                    ? 'make_user'
-                                    : 'make_admin',
-                                child: Text(role == 'admin'
-                                    ? 'ปรับเป็น user'
-                                    : 'ปรับเป็น admin'),
+                                value:
+                                    role == 'admin' ? 'make_user' : 'make_admin',
+                                child: Text(
+                                  role == 'admin'
+                                      ? 'ปรับเป็น user'
+                                      : 'ปรับเป็น admin',
+                                ),
                               ),
                               PopupMenuItem(
                                 value: 'toggle_active',
-                                child: Text(isActive
-                                    ? 'ปิดการใช้งานบัญชี'
-                                    : 'เปิดการใช้งานบัญชี'),
+                                child: Text(
+                                  isEnabled
+                                      ? 'ปิดการใช้งานบัญชี'
+                                      : 'เปิดการใช้งานบัญชี',
+                                ),
                               ),
                             ],
                           ),
@@ -196,4 +229,108 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
       ),
     );
   }
+
+  _UserActivityState _resolveActivity(Map<String, dynamic> user) {
+    final isEnabled = user['is_active'] != false;
+    final activityTime = _readActivityTime(user);
+
+    if (!isEnabled) {
+      return const _UserActivityState(
+        label: 'Inactive',
+        color: Colors.redAccent,
+        detail: 'บัญชีถูกปิดการใช้งาน',
+      );
+    }
+
+    if (activityTime == null) {
+      return const _UserActivityState(
+        label: 'Unknown',
+        color: Colors.grey,
+        detail: 'ไม่พบข้อมูล activity ล่าสุดในฐานข้อมูล',
+      );
+    }
+
+    final now = DateTime.now().toUtc();
+    final difference = now.difference(activityTime.toUtc());
+
+    if (difference.inMinutes <= 5) {
+      return _UserActivityState(
+        label: 'Active now',
+        color: Colors.green,
+        detail: 'ใช้งานล่าสุด ${_formatRelative(difference)}',
+      );
+    }
+
+    return _UserActivityState(
+      label: 'Recently active',
+      color: Colors.orange,
+      detail: 'ใช้งานล่าสุด ${_formatRelative(difference)}',
+    );
+  }
+
+  DateTime? _readActivityTime(Map<String, dynamic> user) {
+    const candidateKeys = [
+      'last_seen',
+      'last_active_at',
+      'last_sign_in_at',
+    ];
+
+    for (final key in candidateKeys) {
+      final value = user[key];
+      if (value is String && value.isNotEmpty) {
+        return DateTime.tryParse(value);
+      }
+    }
+    return null;
+  }
+
+  String _formatRelative(Duration difference) {
+    if (difference.inMinutes < 1) {
+      return 'เมื่อสักครู่';
+    }
+    if (difference.inMinutes < 60) {
+      return '${difference.inMinutes} นาทีที่แล้ว';
+    }
+    if (difference.inHours < 24) {
+      return '${difference.inHours} ชั่วโมงที่แล้ว';
+    }
+    return '${difference.inDays} วันที่แล้ว';
+  }
+}
+
+class _ActivityBadge extends StatelessWidget {
+  const _ActivityBadge({required this.activity});
+
+  final _UserActivityState activity;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: activity.color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        activity.label,
+        style: TextStyle(
+          color: activity.color,
+          fontWeight: FontWeight.w700,
+          fontSize: 12,
+        ),
+      ),
+    );
+  }
+}
+
+class _UserActivityState {
+  const _UserActivityState({
+    required this.label,
+    required this.color,
+    this.detail,
+  });
+
+  final String label;
+  final Color color;
+  final String? detail;
 }
